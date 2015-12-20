@@ -1,0 +1,108 @@
+---
+title: "Prediction of Exercise Motion"
+output: html_document
+---
+```{r, echo = FALSE, warning = FALSE, message = FALSE}
+set.seed(1)
+library(lattice)
+library(ggplot2)
+library(caret)
+library(randomForest)
+```
+
+###Summary
+The purpose of this project is to be able to identify motion errors an individual can make while performing the Unilateral Dumbbell Biceps Curl exercise. The data for this project comes from "Qualitative Activity Recognition of Weight Lifting Exercises" by Velloso, et. al. In their study they attached several sensors to a number of men and instructed them to perform the biceps curl exercise, while instructing them to make certain qualitative errors in the method they perform the exercise, for instance "throwing hips to the front." They took motion sensor measurements from several places on the individuals' bodies throughout the exercise, and classified the data according to the motion they had instructed them to make. There are five different types of motions they were instructed to make: the correct motion and four different types of errors.
+
+###Data Contents
+The data set consists of: the participant's name, a time stamp, a variable indicating whether an observation is a measurement taken at the start of a new exercise or during an exercise, the raw data taken by the sensors, statistical summary variables (eg. mean, skewness, kurtosis) taken by the sensors over each full exercise motion, and a variable "classe" that indicates what motion type the individual was instructed to do.
+
+```{r, echo = FALSE}
+raw.data <- read.csv("pml-training.csv")
+#str(raw.data)
+```
+
+###Data Processing
+In their paper Velloso, et. al. build a model to predict the classe variable using the statistical summary measurements for each complete exercise as features. However, in the testing data set provided for the course project the raw sensor measurements are provided, but not the statistical summary data. Thus we must build a model using the raw measurements as features.
+
+Since there is only one summary measurement for each exercise, and each exercise may span hundreds of observations, the summary measurement data is spare by definition. Therefore, I started by removing features from the dataset that had a majority of the values missing.
+
+I also then removed the data containing the participant's name and the measurement time stamp. Although the testing samples are drawn from the same data set, so including these variables would improve the model accuracy on the data set, a model including them would lack generality to new measurements and be a somewhat trivial solution and I wanted to first attempt building a model that could generalize.
+
+```{r}
+majorityMissing <- function(col) {
+      n.missing <- sum(sapply(col, function(x) x == "" || is.na(x)))
+      percent.missing <- n.missing/length(col)
+      
+      if (percent.missing > 0.5) {
+            return(TRUE)
+      } else {
+            return(FALSE)
+      }
+}
+
+to.remove <- c()
+
+for (i in 1:ncol(raw.data)){
+      if (majorityMissing(raw.data[,i])) {
+            to.remove <- c(to.remove, i)     
+      }
+}
+
+to.remove <- c(1:7, to.remove)
+
+activity <- raw.data[,-to.remove]
+```
+
+###Model Building
+I started by dividing the data set into 3 groups: a training set, a testing set, and a validation set, with 60%, 20%, and 20% respectively. I opted to use a Random Forest model and my approach was to build two models: a random forest using the raw features and one using the principal components of the raw features. I then tested each of these models on the testing set to evaluate their accuracy and choose the better of the two, and then finally cross validated the winning model on the validation set to ensure out of sample accuracy stayed consistent.
+
+```{r}
+
+in.train = createDataPartition(y = activity$classe, p = 0.6, list = FALSE)
+training <- activity[in.train, ]
+test.and.val <- activity[-in.train, ]
+
+in.test <- createDataPartition(y = test.and.val$classe, p = 0.5, list = FALSE)
+testing <- test.and.val[in.test,]
+validation <- test.and.val[-in.test,]
+```
+
+I started by training a random forest model on the raw data using the classe variable as the outcome and all the raw measurement data as the features (Model 1)
+
+```{r}
+model.rf <- randomForest(y = training$classe, x = training[, -ncol(training)])
+```
+
+Then I calculated principal components of the raw features and built a random forest with classe as the outcome and the principal components as features (Model 2)
+
+```{r}
+pre.proc <- preProcess(training[,-ncol(training)], method = "pca")
+training.pca <- predict(pre.proc, training[,-ncol(training)])
+model.rf.pca <- randomForest(y = training$classe, x = training.pca)
+```
+
+###Cross Validation
+Then I calculated the out of sample accuracy rates for both Models 1 and 2 and the testing data set.
+
+```{r}
+preds.rf <- predict(model.rf, testing[,-ncol(testing)])
+
+confusionMatrix(testing$classe, preds.rf)$overall
+```
+
+```{r}
+testing.pca <- predict(pre.proc, testing[,-ncol(testing)])
+
+preds.rf.pca <- predict(model.rf.pca, testing.pca)
+
+confusionMatrix(testing$classe, preds.rf.pca)$overall
+```
+
+Model 1 has an accuracy of 99.3% on the testing data while Model 2 has an accuracy of 96.8%. Since the accuracy of Model 1 out of sample is good enough to predict 20 new values with a high likelihood of success on all 20 (the evaluation criteria for the model), I then discard Model 2 and proceed with validating the raw feature random forest on the remaining 20% of the data in the validation set.
+
+```{r}
+preds.val <- predict(model.rf, validation[,-ncol(validation)])
+confusionMatrix(validation$classe, preds.val)$overall
+```
+
+The model achieves 99.5% accuracy with a [99.24%, 99.71%] 95% confidence interval on the validation set.
