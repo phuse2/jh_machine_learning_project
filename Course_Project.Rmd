@@ -1,5 +1,5 @@
 ---
-title: "Prediction of Exercise Motion"
+title: "Prediction of Exercise Motion Type"
 output: html_document
 ---
 ```{r, echo = FALSE, warning = FALSE, message = FALSE}
@@ -53,56 +53,47 @@ to.remove <- c(1:7, to.remove)
 activity <- raw.data[,-to.remove]
 ```
 
-###Model Building
-I started by dividing the data set into 3 groups: a training set, a testing set, and a validation set, with 60%, 20%, and 20% respectively. I opted to use a Random Forest model and my approach was to build two models: a random forest using the raw features and one using the principal components of the raw features. I then tested each of these models on the testing set to evaluate their accuracy and choose the better of the two, and then finally cross validated the winning model on the validation set to ensure out of sample accuracy stayed consistent.
+###Model Building and Cross Validation
+I started by dividing the data set into 3 groups: a Training set, and a Test set with 60%, 40% respectively. I opted to use a Random Forest model and my approach was to use k-folds cross validation on the Training set to estimate the out of sample error rate, then train a random forest model on the entire training set and use the test set to verify the out of sample error rate.
 
 ```{r}
 
 in.train = createDataPartition(y = activity$classe, p = 0.6, list = FALSE)
 training <- activity[in.train, ]
-test.and.val <- activity[-in.train, ]
+test <- activity[-in.train, ]
 
-in.test <- createDataPartition(y = test.and.val$classe, p = 0.5, list = FALSE)
-testing <- test.and.val[in.test,]
-validation <- test.and.val[-in.test,]
 ```
 
-I started by training a random forest model on the raw data using the classe variable as the outcome and all the raw measurement data as the features (Model 1)
+I started by creating 5 k-fold splits of the Training data into k training and test sets, then training 5 random forest models on the training sets and checking the out of sample error rate on the k test sets.
 
 ```{r}
-model.rf <- randomForest(y = training$classe, x = training[, -ncol(training)])
+train.folds <- createFolds(y = training$classe, k = 5, list = TRUE, returnTrain = TRUE)
+
+error.rates <- c()
+
+for (i in 1:length(train.folds)) {
+      k.train <- training[train.folds[[i]],]
+      k.test <- training[-train.folds[[i]],]
+      
+      k.model <- randomForest(y = k.train$classe, x = k.train[, -ncol(k.train)])
+      k.preds <- predict(k.model, k.test[,-ncol(k.test)])
+      error.rates <- c(error.rates, 1 - sum(k.test$classe == k.preds) / 
+                                 length(k.test$classe))
+}
+
+summary(error.rates)
+
 ```
 
-Then I calculated principal components of the raw features and built a random forest with classe as the outcome and the principal components as features (Model 2)
+The average error rate in the k-folds cross validation is 0.93%. Now I train the random forest model on the entire Training data set, predict values for the Testing data, and check the error rate.
 
 ```{r}
-pre.proc <- preProcess(training[,-ncol(training)], method = "pca")
-training.pca <- predict(pre.proc, training[,-ncol(training)])
-model.rf.pca <- randomForest(y = training$classe, x = training.pca)
+model <- randomForest(y = training$classe, x = training[, -ncol(training)])
+
+preds <- predict(model, test[,-ncol(test)])
+
+confusionMatrix(test$classe, preds)$overall
 ```
 
-###Cross Validation
-Then I calculated the out of sample accuracy rates for both Models 1 and 2 and the testing data set.
 
-```{r}
-preds.rf <- predict(model.rf, testing[,-ncol(testing)])
-
-confusionMatrix(testing$classe, preds.rf)$overall
-```
-
-```{r}
-testing.pca <- predict(pre.proc, testing[,-ncol(testing)])
-
-preds.rf.pca <- predict(model.rf.pca, testing.pca)
-
-confusionMatrix(testing$classe, preds.rf.pca)$overall
-```
-
-Model 1 has an accuracy of 99.3% on the testing data while Model 2 has an accuracy of 96.8%. Since the accuracy of Model 1 out of sample is good enough to predict 20 new values with a high likelihood of success on all 20 (the evaluation criteria for the model), I then discard Model 2 and proceed with validating the raw feature random forest on the remaining 20% of the data in the validation set.
-
-```{r}
-preds.val <- predict(model.rf, validation[,-ncol(validation)])
-confusionMatrix(validation$classe, preds.val)$overall
-```
-
-The model achieves 99.5% accuracy with a [99.24%, 99.71%] 95% confidence interval on the validation set.
+The model achieves an out of sample error rate of 0.72% with a [0.54%, 0.93%] 95% confidence interval on the Testing set which lines up with the result from the k-folds cross validation estimate.
